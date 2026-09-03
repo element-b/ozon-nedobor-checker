@@ -77,6 +77,11 @@ def apply_main_styles() -> None:
     st.markdown(
         """
         <style>
+            /* Скрытие ненужного элемента интерфейса */
+            div.st-emotion-cache-17d2wyw:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) {
+                display: none !important;
+            }
+
             .stApp {
                 background-color: #FFFFFF;
                 color: #000000;
@@ -203,7 +208,7 @@ def apply_main_styles() -> None:
 
 
 def apply_login_styles() -> None:
-    """Стили страницы входа в визуальном стиле исходного проекта."""
+    """Стили страницы входа с мятно-зеленой подсветкой кнопки."""
     st.markdown(
         """
         <style>
@@ -216,7 +221,7 @@ def apply_login_styles() -> None:
                 background:
                     radial-gradient(
                         circle at top left,
-                        rgba(80, 200, 120, 0.16),
+                        rgba(62, 180, 137, 0.16),
                         transparent 35%
                     ),
                     radial-gradient(
@@ -256,21 +261,31 @@ def apply_login_styles() -> None:
                 color: #A4A1B4 !important;
             }
 
+            /* Кнопка Войти в форме авторизации */
+            .login-container [data-testid="stFormSubmitButton"] > button,
             .login-container .stButton > button {
                 width: 100%;
                 background: transparent !important;
-                color: #50C878 !important;
-                border: 2px solid #50C878 !important;
+                color: #3EB489 !important;
+                border: 2px solid #3EB489 !important;
                 border-radius: 8px !important;
                 padding: 11px !important;
                 font-weight: 650 !important;
-                transition: all 0.25s ease-in-out;
+                transition: all 0.25s ease-in-out !important;
             }
 
-            .login-container .stButton > button:hover {
-                background: #50C878 !important;
+            /* Мятно-зеленая подсветка при наведении */
+            .login-container [data-testid="stFormSubmitButton"] > button:hover,
+            .login-container [data-testid="stFormSubmitButton"] > button:focus,
+            .login-container [data-testid="stFormSubmitButton"] > button:active,
+            .login-container .stButton > button:hover,
+            .login-container .stButton > button:focus,
+            .login-container .stButton > button:active {
+                background: #3EB489 !important;
+                background-color: #3EB489 !important;
                 color: #FFFFFF !important;
-                box-shadow: 0 5px 18px rgba(80, 200, 120, 0.35);
+                border-color: #3EB489 !important;
+                box-shadow: 0 0 20px rgba(62, 180, 137, 0.5) !important;
                 transform: translateY(-1px);
             }
 
@@ -981,7 +996,7 @@ def render_main_page() -> None:
         and source_file_b is not None
     )
 
-    action_col_1, action_col_2, action_col_3 = st.columns([1.2, 1, 3])
+    action_col_1, action_col_2, _ = st.columns([1.2, 1, 3])
 
     with action_col_1:
         compare_clicked = st.button(
