@@ -1,12 +1,12 @@
 import hmac
 import io
-import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import pandas as pd
 import streamlit as st
+from openpyxl.styles import PatternFill
 
 
 # ============================================================
@@ -58,6 +58,11 @@ def init_session_state() -> None:
 
     if "comparison_meta" not in st.session_state:
         st.session_state.comparison_meta = None
+
+    # Версия загрузчиков файлов.
+    # Нужна, чтобы кнопка «Очистить» могла полностью сбрасывать file_uploader.
+    if "uploader_version" not in st.session_state:
+        st.session_state.uploader_version = 0
 
 
 init_session_state()
@@ -153,11 +158,6 @@ def apply_main_styles() -> None:
                 padding: 14px 18px;
                 margin-bottom: 24px;
                 color: #1F2937;
-            }
-
-            .metric-card-note {
-                color: #555555 !important;
-                font-size: 0.9rem;
             }
 
             div[data-testid="metric-container"] {
@@ -279,14 +279,7 @@ def apply_login_styles() -> None:
                 text-align: center;
                 font-size: 1.9rem;
                 font-weight: 700;
-                margin-bottom: 0.4rem;
-            }
-
-            .login-subtitle {
-                color: #B7B4C5 !important;
-                text-align: center;
                 margin-bottom: 1.8rem;
-                font-size: 0.98rem;
             }
         </style>
         """,
@@ -340,11 +333,22 @@ def check_login(username: str, password: str) -> bool:
     return username_ok and password_ok
 
 
+def clear_workspace() -> None:
+    """
+    Сбрасывает результаты и загруженные файлы.
+
+    Увеличение uploader_version создаёт новые ключи file_uploader,
+    поэтому интерфейс загрузки очищается полностью.
+    """
+    st.session_state.comparison_result = None
+    st.session_state.comparison_meta = None
+    st.session_state.uploader_version += 1
+
+
 def logout() -> None:
     """Выход и очистка результатов текущей сессии."""
     st.session_state.authenticated = False
-    st.session_state.comparison_result = None
-    st.session_state.comparison_meta = None
+    clear_workspace()
 
 
 def render_login_page() -> None:
@@ -362,15 +366,6 @@ def render_login_page() -> None:
 
         st.markdown(
             '<div class="login-title">📦 Контроль недобора Ozon</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            (
-                '<div class="login-subtitle">'
-                "Загрузите файлы поставки и получите расчёт недобора."
-                "</div>"
-            ),
             unsafe_allow_html=True,
         )
 
@@ -732,11 +727,11 @@ def compare_sources(
     """
     Сравнивает исходный список A и список Ozon B.
 
-    Формула расчёта:
+    Позиции с недобором выводятся первыми.
+    Позиции без недобора, у которых значение равно 0,
+    выводятся ниже после всех позиций с недобором.
 
-    Недобор = Исходное количество - Количество в Ozon
-
-    Если результат меньше нуля, недобор считается равным 0.
+    Внутри обеих групп сохраняется порядок файла A.
     """
     source_a_aggregated, duplicate_articles_a = aggregate_source_a(
         source_a
@@ -780,7 +775,22 @@ def compare_sources(
             "Количество в Ozon",
             "Недобор",
         ]
-    ]
+    ].copy()
+
+    # False — строка с недобором, выводится первой.
+    # True — строка с нулевым недобором, выводится ниже.
+    # mergesort сохраняет исходный порядок строк файла A внутри каждой группы.
+    result["_is_zero_shortage"] = result["Недобор"] == 0
+
+    result = (
+        result.sort_values(
+            by="_is_zero_shortage",
+            ascending=True,
+            kind="mergesort",
+        )
+        .drop(columns="_is_zero_shortage")
+        .reset_index(drop=True)
+    )
 
     return result, duplicate_articles_a, extra_articles_b
 
@@ -802,8 +812,14 @@ def create_csv_bytes(df: pd.DataFrame) -> bytes:
 
 
 def create_xlsx_bytes(df: pd.DataFrame) -> bytes:
-    """Готовит XLSX для скачивания."""
+    """Готовит XLSX-файл для скачивания."""
     output = io.BytesIO()
+
+    yellow_fill = PatternFill(
+        start_color="FFF2CC",
+        end_color="FFF2CC",
+        fill_type="solid",
+    )
 
     with pd.ExcelWriter(
         output,
@@ -820,13 +836,13 @@ def create_xlsx_bytes(df: pd.DataFrame) -> bytes:
         # Закрепляет строку с заголовками.
         worksheet.freeze_panes = "A2"
 
-        # Настраивает примерную ширину колонок.
+        # Настраивает ширину колонок.
         worksheet.column_dimensions["A"].width = 34
         worksheet.column_dimensions["B"].width = 24
         worksheet.column_dimensions["C"].width = 22
         worksheet.column_dimensions["D"].width = 15
 
-        # Выделяет строки, где есть недобор.
+        # Выделяет жёлтым строки, в которых найден недобор.
         for row_index in range(2, worksheet.max_row + 1):
             shortage_value = worksheet.cell(
                 row=row_index,
@@ -838,13 +854,7 @@ def create_xlsx_bytes(df: pd.DataFrame) -> bytes:
                     worksheet.cell(
                         row=row_index,
                         column=column_index,
-                    ).fill = __import__(
-                        "openpyxl"
-                    ).styles.PatternFill(
-                        start_color="FFF2CC",
-                        end_color="FFF2CC",
-                        fill_type="solid",
-                    )
+                    ).fill = yellow_fill
 
     return output.getvalue()
 
@@ -876,6 +886,10 @@ def render_sidebar() -> None:
         )
 
         st.divider()
+
+        if st.button("🧹 Очистить данные", use_container_width=True):
+            clear_workspace()
+            st.rerun()
 
         if st.button("⍈  Выйти", use_container_width=True):
             logout()
@@ -911,12 +925,14 @@ def render_main_page() -> None:
         """
         <div class="description-box">
             Загрузите два файла поставки. Приложение сопоставит позиции
-            по артикулу, рассчитает недобор и подготовит итоговую таблицу
-            в порядке исходного файла A.
+            по артикулу, рассчитает недобор и подготовит итоговую таблицу.
+            Сначала будут показаны позиции с недобором, затем позиции без недобора.
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    uploader_version = st.session_state.uploader_version
 
     col_a, col_b = st.columns(2)
 
@@ -930,7 +946,7 @@ def render_main_page() -> None:
         source_file_a = st.file_uploader(
             "Загрузите файл A",
             type=["xls", "xlsx", "csv"],
-            key="source_file_a",
+            key=f"source_file_a_{uploader_version}",
             label_visibility="collapsed",
         )
 
@@ -949,7 +965,7 @@ def render_main_page() -> None:
         source_file_b = st.file_uploader(
             "Загрузите файл B",
             type=["xls", "xlsx", "csv"],
-            key="source_file_b",
+            key=f"source_file_b_{uploader_version}",
             label_visibility="collapsed",
         )
 
@@ -965,11 +981,27 @@ def render_main_page() -> None:
         and source_file_b is not None
     )
 
-    if st.button(
-        "🔍 Сравнить файлы",
-        type="primary",
-        disabled=not can_compare,
-    ):
+    action_col_1, action_col_2, action_col_3 = st.columns([1.2, 1, 3])
+
+    with action_col_1:
+        compare_clicked = st.button(
+            "🔍 Сравнить файлы",
+            type="primary",
+            disabled=not can_compare,
+            use_container_width=True,
+        )
+
+    with action_col_2:
+        clear_clicked = st.button(
+            "🧹 Очистить",
+            use_container_width=True,
+        )
+
+    if clear_clicked:
+        clear_workspace()
+        st.rerun()
+
+    if compare_clicked:
         try:
             with st.spinner("Читаем файлы и рассчитываем недобор..."):
                 raw_a = read_uploaded_file(
@@ -1070,7 +1102,11 @@ def render_main_page() -> None:
         (result["Недобор"] > 0).sum()
     )
 
-    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+    zero_shortage_positions = int(
+        (result["Недобор"] == 0).sum()
+    )
+
+    metric_1, metric_2, metric_3, metric_4, metric_5 = st.columns(5)
 
     metric_1.metric(
         "Позиций в файле A",
@@ -1092,9 +1128,15 @@ def render_main_page() -> None:
         f"{total_shortage:,}".replace(",", " "),
     )
 
+    metric_5.metric(
+        "Без недобора",
+        zero_shortage_positions,
+    )
+
     if shortage_positions > 0:
         st.warning(
-            f"Недобор найден в позициях: {shortage_positions}."
+            f"Недобор найден в позициях: {shortage_positions}. "
+            "Строки с недобором отображаются в начале таблицы."
         )
     else:
         st.success(
