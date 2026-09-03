@@ -77,11 +77,6 @@ def apply_main_styles() -> None:
     st.markdown(
         """
         <style>
-            /* Скрытие ненужного элемента интерфейса */
-            div.st-emotion-cache-17d2wyw:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) {
-                display: none !important;
-            }
-
             .stApp {
                 background-color: #FFFFFF;
                 color: #000000;
@@ -148,11 +143,15 @@ def apply_main_styles() -> None:
                 box-shadow: 0 3px 10px rgba(0, 155, 119, 0.28);
             }
 
-            .upload-card {
-                border: 1px solid #E4E4E7;
-                border-radius: 12px;
-                background-color: #FAFAFA;
-                padding: 20px;
+            /*
+                Карточки загрузки реализованы через st.container(border=True).
+                Это заменяет пустые HTML-обёртки upload-card, которые ранее
+                создавали лишние DOM-элементы на главной странице.
+            */
+            div[data-testid="stVerticalBlockBorderWrapper"] {
+                border: 1px solid #E4E4E7 !important;
+                border-radius: 12px !important;
+                background-color: #FAFAFA !important;
                 min-height: 220px;
             }
 
@@ -208,7 +207,7 @@ def apply_main_styles() -> None:
 
 
 def apply_login_styles() -> None:
-    """Стили страницы входа с мятно-зеленой подсветкой кнопки."""
+    """Стили страницы входа."""
     st.markdown(
         """
         <style>
@@ -221,7 +220,7 @@ def apply_login_styles() -> None:
                 background:
                     radial-gradient(
                         circle at top left,
-                        rgba(62, 180, 137, 0.16),
+                        rgba(80, 200, 120, 0.16),
                         transparent 35%
                     ),
                     radial-gradient(
@@ -242,7 +241,7 @@ def apply_login_styles() -> None:
                 max-width: 100% !important;
             }
 
-            .login-container div[data-testid="stForm"] {
+            div[data-testid="stForm"] {
                 background-color: rgba(21, 18, 38, 0.96);
                 padding: 2.5rem;
                 border-radius: 14px;
@@ -250,43 +249,46 @@ def apply_login_styles() -> None:
                 box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
             }
 
-            .login-container input {
+            div[data-testid="stForm"] input {
                 background-color: #151226 !important;
                 border: 1px solid #34304B !important;
                 color: #FFFFFF !important;
                 border-radius: 7px !important;
             }
 
-            .login-container input::placeholder {
+            div[data-testid="stForm"] input::placeholder {
                 color: #A4A1B4 !important;
             }
 
-            /* Кнопка Войти в форме авторизации */
-            .login-container [data-testid="stFormSubmitButton"] > button,
-            .login-container .stButton > button {
+            /*
+                st.form_submit_button создаёт блок stFormSubmitButton,
+                поэтому стили применяются именно к нему.
+            */
+            div[data-testid="stForm"] .stFormSubmitButton > button {
                 width: 100%;
-                background: transparent !important;
-                color: #3EB489 !important;
-                border: 2px solid #3EB489 !important;
+                background-color: transparent !important;
+                color: #50C878 !important;
+                border: 2px solid #50C878 !important;
                 border-radius: 8px !important;
                 padding: 11px !important;
                 font-weight: 650 !important;
                 transition: all 0.25s ease-in-out !important;
             }
 
-            /* Мятно-зеленая подсветка при наведении */
-            .login-container [data-testid="stFormSubmitButton"] > button:hover,
-            .login-container [data-testid="stFormSubmitButton"] > button:focus,
-            .login-container [data-testid="stFormSubmitButton"] > button:active,
-            .login-container .stButton > button:hover,
-            .login-container .stButton > button:focus,
-            .login-container .stButton > button:active {
-                background: #3EB489 !important;
-                background-color: #3EB489 !important;
+            /*
+                Мятно-зелёная подсветка кнопки «Войти» при наведении.
+            */
+            div[data-testid="stForm"] .stFormSubmitButton > button:hover {
+                background-color: #50C878 !important;
                 color: #FFFFFF !important;
-                border-color: #3EB489 !important;
-                box-shadow: 0 0 20px rgba(62, 180, 137, 0.5) !important;
+                border-color: #50C878 !important;
+                box-shadow: 0 5px 18px rgba(80, 200, 120, 0.35) !important;
                 transform: translateY(-1px);
+            }
+
+            div[data-testid="stForm"] .stFormSubmitButton > button:focus-visible {
+                outline: 3px solid rgba(80, 200, 120, 0.45) !important;
+                outline-offset: 3px;
             }
 
             .login-title {
@@ -377,8 +379,6 @@ def render_login_page() -> None:
     _, center_column, _ = st.columns([1, 1.05, 1])
 
     with center_column:
-        st.markdown('<div class="login-container">', unsafe_allow_html=True)
-
         st.markdown(
             '<div class="login-title">📦 Контроль недобора Ozon</div>',
             unsafe_allow_html=True,
@@ -419,8 +419,6 @@ def render_login_page() -> None:
                     st.rerun()
                 else:
                     st.error("Неверный логин или пароль.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ============================================================
@@ -952,42 +950,44 @@ def render_main_page() -> None:
     col_a, col_b = st.columns(2)
 
     with col_a:
-        st.markdown('<div class="upload-card">', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.subheader("A. Исходный файл")
+            st.caption(
+                "Файл МойСклад или сборочный лист с исходным количеством."
+            )
+            st.caption(
+                "Артикул — D, количество — H, начало данных — строка 14."
+            )
 
-        st.subheader("A. Исходный файл")
-        st.caption("Файл МойСклад или сборочный лист с исходным количеством.")
-        st.caption("Артикул — D, количество — H, начало данных — строка 14.")
+            source_file_a = st.file_uploader(
+                "Загрузите файл A",
+                type=["xls", "xlsx", "csv"],
+                key=f"source_file_a_{uploader_version}",
+                label_visibility="collapsed",
+            )
 
-        source_file_a = st.file_uploader(
-            "Загрузите файл A",
-            type=["xls", "xlsx", "csv"],
-            key=f"source_file_a_{uploader_version}",
-            label_visibility="collapsed",
-        )
-
-        if source_file_a is not None:
-            st.success(f"Загружен файл: `{source_file_a.name}`")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+            if source_file_a is not None:
+                st.success(f"Загружен файл: `{source_file_a.name}`")
 
     with col_b:
-        st.markdown('<div class="upload-card">', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.subheader("B. Файл Ozon")
+            st.caption(
+                "Выгрузка Ozon с подтверждённым количеством в поставке."
+            )
+            st.caption(
+                "Артикул — D, количество — F, начало данных — строка 2."
+            )
 
-        st.subheader("B. Файл Ozon")
-        st.caption("Выгрузка Ozon с подтверждённым количеством в поставке.")
-        st.caption("Артикул — D, количество — F, начало данных — строка 2.")
+            source_file_b = st.file_uploader(
+                "Загрузите файл B",
+                type=["xls", "xlsx", "csv"],
+                key=f"source_file_b_{uploader_version}",
+                label_visibility="collapsed",
+            )
 
-        source_file_b = st.file_uploader(
-            "Загрузите файл B",
-            type=["xls", "xlsx", "csv"],
-            key=f"source_file_b_{uploader_version}",
-            label_visibility="collapsed",
-        )
-
-        if source_file_b is not None:
-            st.success(f"Загружен файл: `{source_file_b.name}`")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+            if source_file_b is not None:
+                st.success(f"Загружен файл: `{source_file_b.name}`")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -996,7 +996,7 @@ def render_main_page() -> None:
         and source_file_b is not None
     )
 
-    action_col_1, action_col_2, _ = st.columns([1.2, 1, 3])
+    action_col_1, action_col_2, action_col_3 = st.columns([1.2, 1, 3])
 
     with action_col_1:
         compare_clicked = st.button(
