@@ -34,7 +34,7 @@ SOURCE_A_ARTICLE_COLUMN = 3
 SOURCE_A_QUANTITY_COLUMN = 7
 SOURCE_A_START_ROW = 13
 
-# Файл B — файл Ozon.
+# Файл B — выгрузка Ozon.
 # Excel-колонки:
 # D = индекс 3 в Python.
 # F = индекс 5 в Python.
@@ -43,7 +43,8 @@ SOURCE_B_ARTICLE_COLUMN = 3
 SOURCE_B_QUANTITY_COLUMN = 5
 SOURCE_B_START_ROW = 1
 
-# Максимальное число файлов поставок для расчёта финального количества.
+# Максимальное количество выгрузок Ozon на странице
+# финального количества.
 MAX_DELIVERY_FILES = 4
 
 
@@ -71,7 +72,7 @@ def init_session_state() -> None:
     if "final_quantity_meta" not in st.session_state:
         st.session_state.final_quantity_meta = None
 
-    # Версии загрузчиков позволяют полностью очистить file_uploader.
+    # Версии uploader нужны для полного сброса загруженных файлов.
     if "shortage_uploader_version" not in st.session_state:
         st.session_state.shortage_uploader_version = 0
 
@@ -353,29 +354,30 @@ def check_login(username: str, password: str) -> bool:
 
 
 def clear_shortage_workspace() -> None:
-    """Очищает расчёт недобора и загруженные для него файлы."""
+    """Очищает данные страницы контроля недобора."""
     st.session_state.comparison_result = None
     st.session_state.comparison_meta = None
     st.session_state.shortage_uploader_version += 1
 
 
 def clear_final_quantity_workspace() -> None:
-    """Очищает расчёт финального количества и его загруженные файлы."""
+    """Очищает данные страницы финального количества."""
     st.session_state.final_quantity_result = None
     st.session_state.final_quantity_meta = None
     st.session_state.final_quantity_uploader_version += 1
 
 
 def switch_page(page_name: str) -> None:
-    """Переключает внутреннюю страницу приложения."""
+    """Переключает страницу приложения."""
     st.session_state.current_page = page_name
     st.rerun()
 
 
 def logout() -> None:
-    """Выход и очистка результатов текущей сессии."""
+    """Выход и очистка данных текущей сессии."""
     st.session_state.authenticated = False
     st.session_state.current_page = "shortage"
+
     clear_shortage_workspace()
     clear_final_quantity_workspace()
 
@@ -737,7 +739,6 @@ def aggregate_source_b(source_b: pd.DataFrame) -> pd.DataFrame:
             as_index=False,
         )["Количество"]
         .sum()
-        .reset_index()
         .rename(
             columns={
                 "Количество": "Количество в Ozon",
@@ -821,18 +822,13 @@ def calculate_final_order_quantity(
     """
     Суммирует подтверждённое количество по всем загруженным поставкам.
 
-    Для каждого артикула рассчитываются:
-    - финальное количество к отправке;
-    - число файлов поставок, в которых встретился артикул.
+    Для каждого артикула рассчитывается итоговое количество
+    товара к отправке по заказу.
     """
-    rows = []
-
-    for file_name, data in delivery_data:
-        file_data = data.copy()
-        file_data["_file_name"] = file_name
-        rows.append(file_data)
-
-    all_deliveries = pd.concat(rows, ignore_index=True)
+    all_deliveries = pd.concat(
+        [data for _, data in delivery_data],
+        ignore_index=True,
+    )
 
     result = (
         all_deliveries.groupby(
@@ -844,13 +840,11 @@ def calculate_final_order_quantity(
             {
                 "Артикул": "first",
                 "Количество": "sum",
-                "_file_name": "nunique",
             }
         )
         .rename(
             columns={
                 "Количество": "Финальное количество к отправке",
-                "_file_name": "Файлов поставки",
             }
         )
     )
@@ -858,13 +852,11 @@ def calculate_final_order_quantity(
     result["Финальное количество к отправке"] = (
         result["Финальное количество к отправке"].astype(int)
     )
-    result["Файлов поставки"] = result["Файлов поставки"].astype(int)
 
     return result[
         [
             "Артикул",
             "Финальное количество к отправке",
-            "Файлов поставки",
         ]
     ]
 
@@ -947,14 +939,13 @@ def create_final_quantity_xlsx_bytes(df: pd.DataFrame) -> bytes:
 
         worksheet.freeze_panes = "A2"
         worksheet.column_dimensions["A"].width = 34
-        worksheet.column_dimensions["B"].width = 34
-        worksheet.column_dimensions["C"].width = 20
+        worksheet.column_dimensions["B"].width = 36
 
     return output.getvalue()
 
 
 # ============================================================
-# ИНТЕРФЕЙС: БОКОВАЯ ПАНЕЛЬ
+# БОКОВАЯ ПАНЕЛЬ
 # ============================================================
 
 def render_sidebar() -> None:
@@ -1045,11 +1036,11 @@ def render_source_preview(
 
 
 # ============================================================
-# ИНТЕРФЕЙС: СТРАНИЦА НЕДОБОРА
+# СТРАНИЦА КОНТРОЛЯ НЕДОБОРА
 # ============================================================
 
 def render_shortage_page() -> None:
-    """Главная страница контроля недобора."""
+    """Страница контроля недобора."""
     apply_main_styles()
     render_sidebar()
 
@@ -1131,6 +1122,7 @@ def render_shortage_page() -> None:
         clear_clicked = st.button(
             "🧹 Очистить",
             use_container_width=True,
+            key="clear_shortage",
         )
 
     if clear_clicked:
@@ -1194,7 +1186,6 @@ def render_shortage_page() -> None:
                 )
 
                 st.session_state.comparison_result = result
-
                 st.session_state.comparison_meta = {
                     "raw_a": raw_a,
                     "raw_b": raw_b,
@@ -1348,7 +1339,7 @@ def render_shortage_page() -> None:
 
 
 # ============================================================
-# ИНТЕРФЕЙС: СТРАНИЦА ФИНАЛЬНОГО КОЛИЧЕСТВА
+# СТРАНИЦА ФИНАЛЬНОГО КОЛИЧЕСТВА
 # ============================================================
 
 def render_final_quantity_page() -> None:
@@ -1397,6 +1388,9 @@ def render_final_quantity_page() -> None:
 
             for uploaded_file in delivery_files:
                 st.caption(f"• `{uploaded_file.name}`")
+
+    if delivery_files is None:
+        delivery_files = []
 
     if len(delivery_files) > MAX_DELIVERY_FILES:
         st.error(
@@ -1537,11 +1531,7 @@ def render_final_quantity_page() -> None:
     product_positions = len(result)
     delivery_files_count = len(meta["file_names"])
 
-    products_in_multiple_files = int(
-        (result["Файлов поставки"] > 1).sum()
-    )
-
-    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+    metric_1, metric_2, metric_3 = st.columns(3)
 
     metric_1.metric("Файлов поставок", delivery_files_count)
     metric_2.metric("Уникальных артикулов", product_positions)
@@ -1549,16 +1539,6 @@ def render_final_quantity_page() -> None:
         "Всего единиц к отправке",
         f"{total_quantity:,}".replace(",", " "),
     )
-    metric_4.metric(
-        "Артикулов в нескольких поставках",
-        products_in_multiple_files,
-    )
-
-    if products_in_multiple_files > 0:
-        st.info(
-            "Количество по артикулам, которые присутствуют в нескольких "
-            "файлах поставок, уже просуммировано."
-        )
 
     st.dataframe(
         result,
@@ -1574,10 +1554,6 @@ def render_final_quantity_page() -> None:
                     "Финальное количество к отправке",
                     format="%d",
                 )
-            ),
-            "Файлов поставки": st.column_config.NumberColumn(
-                "Файлов поставки",
-                format="%d",
             ),
         },
     )
