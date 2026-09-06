@@ -14,7 +14,7 @@ from openpyxl.styles import PatternFill
 # ============================================================
 
 st.set_page_config(
-    page_title="Контроль недобора Ozon",
+    page_title="Контроль поставок Ozon",
     page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -22,7 +22,7 @@ st.set_page_config(
 
 
 # ============================================================
-# НАСТРОЙКИ СТАНДАРТНОЙ СТРУКТУРЫ ФАЙЛОВ
+# НАСТРОЙКИ СТРУКТУРЫ ФАЙЛОВ
 # ============================================================
 
 # Файл A — исходный файл МойСклад.
@@ -43,6 +43,9 @@ SOURCE_B_ARTICLE_COLUMN = 3
 SOURCE_B_QUANTITY_COLUMN = 5
 SOURCE_B_START_ROW = 1
 
+# Максимальное число файлов поставок для расчёта финального количества.
+MAX_DELIVERY_FILES = 4
+
 
 # ============================================================
 # SESSION STATE
@@ -53,16 +56,27 @@ def init_session_state() -> None:
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
+    if "current_page" not in st.session_state:
+        st.session_state.current_page = "shortage"
+
     if "comparison_result" not in st.session_state:
         st.session_state.comparison_result = None
 
     if "comparison_meta" not in st.session_state:
         st.session_state.comparison_meta = None
 
-    # Версия загрузчиков файлов.
-    # Нужна, чтобы кнопка «Очистить» могла полностью сбрасывать file_uploader.
-    if "uploader_version" not in st.session_state:
-        st.session_state.uploader_version = 0
+    if "final_quantity_result" not in st.session_state:
+        st.session_state.final_quantity_result = None
+
+    if "final_quantity_meta" not in st.session_state:
+        st.session_state.final_quantity_meta = None
+
+    # Версии загрузчиков позволяют полностью очистить file_uploader.
+    if "shortage_uploader_version" not in st.session_state:
+        st.session_state.shortage_uploader_version = 0
+
+    if "final_quantity_uploader_version" not in st.session_state:
+        st.session_state.final_quantity_uploader_version = 0
 
 
 init_session_state()
@@ -143,11 +157,6 @@ def apply_main_styles() -> None:
                 box-shadow: 0 3px 10px rgba(0, 155, 119, 0.28);
             }
 
-            /*
-                Карточки загрузки реализованы через st.container(border=True).
-                Это заменяет пустые HTML-обёртки upload-card, которые ранее
-                создавали лишние DOM-элементы на главной странице.
-            */
             div[data-testid="stVerticalBlockBorderWrapper"] {
                 border: 1px solid #E4E4E7 !important;
                 border-radius: 12px !important;
@@ -260,10 +269,6 @@ def apply_login_styles() -> None:
                 color: #A4A1B4 !important;
             }
 
-            /*
-                st.form_submit_button создаёт блок stFormSubmitButton,
-                поэтому стили применяются именно к нему.
-            */
             div[data-testid="stForm"] .stFormSubmitButton > button {
                 width: 100%;
                 background-color: transparent !important;
@@ -275,9 +280,6 @@ def apply_login_styles() -> None:
                 transition: all 0.25s ease-in-out !important;
             }
 
-            /*
-                Мятно-зелёная подсветка кнопки «Войти» при наведении.
-            */
             div[data-testid="stForm"] .stFormSubmitButton > button:hover {
                 background-color: #50C878 !important;
                 color: #FFFFFF !important;
@@ -350,22 +352,32 @@ def check_login(username: str, password: str) -> bool:
     return username_ok and password_ok
 
 
-def clear_workspace() -> None:
-    """
-    Сбрасывает результаты и загруженные файлы.
-
-    Увеличение uploader_version создаёт новые ключи file_uploader,
-    поэтому интерфейс загрузки очищается полностью.
-    """
+def clear_shortage_workspace() -> None:
+    """Очищает расчёт недобора и загруженные для него файлы."""
     st.session_state.comparison_result = None
     st.session_state.comparison_meta = None
-    st.session_state.uploader_version += 1
+    st.session_state.shortage_uploader_version += 1
+
+
+def clear_final_quantity_workspace() -> None:
+    """Очищает расчёт финального количества и его загруженные файлы."""
+    st.session_state.final_quantity_result = None
+    st.session_state.final_quantity_meta = None
+    st.session_state.final_quantity_uploader_version += 1
+
+
+def switch_page(page_name: str) -> None:
+    """Переключает внутреннюю страницу приложения."""
+    st.session_state.current_page = page_name
+    st.rerun()
 
 
 def logout() -> None:
     """Выход и очистка результатов текущей сессии."""
     st.session_state.authenticated = False
-    clear_workspace()
+    st.session_state.current_page = "shortage"
+    clear_shortage_workspace()
+    clear_final_quantity_workspace()
 
 
 def render_login_page() -> None:
@@ -380,7 +392,7 @@ def render_login_page() -> None:
 
     with center_column:
         st.markdown(
-            '<div class="login-title">📦 Контроль недобора Ozon</div>',
+            '<div class="login-title">📦 Контроль поставок Ozon</div>',
             unsafe_allow_html=True,
         )
 
@@ -649,7 +661,7 @@ def extract_source_a(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
 
 def extract_source_b(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     """
-    Файл B — урезанный список из Ozon.
+    Файл B — выгрузка Ozon с подтверждённым количеством.
 
     Используются:
     - D: артикул;
@@ -725,6 +737,7 @@ def aggregate_source_b(source_b: pd.DataFrame) -> pd.DataFrame:
             as_index=False,
         )["Количество"]
         .sum()
+        .reset_index()
         .rename(
             columns={
                 "Количество": "Количество в Ozon",
@@ -741,9 +754,6 @@ def compare_sources(
     Сравнивает исходный список A и список Ozon B.
 
     Позиции с недобором выводятся первыми.
-    Позиции без недобора, у которых значение равно 0,
-    выводятся ниже после всех позиций с недобором.
-
     Внутри обеих групп сохраняется порядок файла A.
     """
     source_a_aggregated, duplicate_articles_a = aggregate_source_a(
@@ -790,9 +800,6 @@ def compare_sources(
         ]
     ].copy()
 
-    # False — строка с недобором, выводится первой.
-    # True — строка с нулевым недобором, выводится ниже.
-    # mergesort сохраняет исходный порядок строк файла A внутри каждой группы.
     result["_is_zero_shortage"] = result["Недобор"] == 0
 
     result = (
@@ -806,6 +813,60 @@ def compare_sources(
     )
 
     return result, duplicate_articles_a, extra_articles_b
+
+
+def calculate_final_order_quantity(
+    delivery_data: List[Tuple[str, pd.DataFrame]],
+) -> pd.DataFrame:
+    """
+    Суммирует подтверждённое количество по всем загруженным поставкам.
+
+    Для каждого артикула рассчитываются:
+    - финальное количество к отправке;
+    - число файлов поставок, в которых встретился артикул.
+    """
+    rows = []
+
+    for file_name, data in delivery_data:
+        file_data = data.copy()
+        file_data["_file_name"] = file_name
+        rows.append(file_data)
+
+    all_deliveries = pd.concat(rows, ignore_index=True)
+
+    result = (
+        all_deliveries.groupby(
+            "_article_key",
+            sort=False,
+            as_index=False,
+        )
+        .agg(
+            {
+                "Артикул": "first",
+                "Количество": "sum",
+                "_file_name": "nunique",
+            }
+        )
+        .rename(
+            columns={
+                "Количество": "Финальное количество к отправке",
+                "_file_name": "Файлов поставки",
+            }
+        )
+    )
+
+    result["Финальное количество к отправке"] = (
+        result["Финальное количество к отправке"].astype(int)
+    )
+    result["Файлов поставки"] = result["Файлов поставки"].astype(int)
+
+    return result[
+        [
+            "Артикул",
+            "Финальное количество к отправке",
+            "Файлов поставки",
+        ]
+    ]
 
 
 # ============================================================
@@ -824,8 +885,8 @@ def create_csv_bytes(df: pd.DataFrame) -> bytes:
     ).encode("utf-8-sig")
 
 
-def create_xlsx_bytes(df: pd.DataFrame) -> bytes:
-    """Готовит XLSX-файл для скачивания."""
+def create_shortage_xlsx_bytes(df: pd.DataFrame) -> bytes:
+    """Готовит XLSX-файл с результатом сравнения недобора."""
     output = io.BytesIO()
 
     yellow_fill = PatternFill(
@@ -846,16 +907,12 @@ def create_xlsx_bytes(df: pd.DataFrame) -> bytes:
 
         worksheet = writer.sheets["Недобор"]
 
-        # Закрепляет строку с заголовками.
         worksheet.freeze_panes = "A2"
-
-        # Настраивает ширину колонок.
         worksheet.column_dimensions["A"].width = 34
         worksheet.column_dimensions["B"].width = 24
         worksheet.column_dimensions["C"].width = 22
         worksheet.column_dimensions["D"].width = 15
 
-        # Выделяет жёлтым строки, в которых найден недобор.
         for row_index in range(2, worksheet.max_row + 1):
             shortage_value = worksheet.cell(
                 row=row_index,
@@ -872,39 +929,99 @@ def create_xlsx_bytes(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
+def create_final_quantity_xlsx_bytes(df: pd.DataFrame) -> bytes:
+    """Готовит XLSX-файл с финальным количеством товаров."""
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(
+        output,
+        engine="openpyxl",
+    ) as writer:
+        df.to_excel(
+            writer,
+            index=False,
+            sheet_name="Финальное количество",
+        )
+
+        worksheet = writer.sheets["Финальное количество"]
+
+        worksheet.freeze_panes = "A2"
+        worksheet.column_dimensions["A"].width = 34
+        worksheet.column_dimensions["B"].width = 34
+        worksheet.column_dimensions["C"].width = 20
+
+    return output.getvalue()
+
+
 # ============================================================
-# ИНТЕРФЕЙС
+# ИНТЕРФЕЙС: БОКОВАЯ ПАНЕЛЬ
 # ============================================================
 
 def render_sidebar() -> None:
     """Боковое меню авторизованной части."""
     settings = get_auth_settings()
     display_name = settings.get("display_name", "Пользователь")
+    current_page = st.session_state.current_page
 
     with st.sidebar:
         st.markdown("## 📦 Ozon")
         st.markdown(f"### {display_name}")
-        st.caption("Контроль недобора поставок")
+        st.caption("Контроль поставок")
+
+        st.divider()
+
+        if current_page == "shortage":
+            st.markdown("**Текущая страница**")
+            st.caption("Контроль недобора поставки")
+
+            if st.button(
+                "📊 Финальное количество",
+                use_container_width=True,
+                key="go_to_final_quantity_page",
+            ):
+                switch_page("final_quantity")
+
+        else:
+            st.markdown("**Текущая страница**")
+            st.caption("Финальное количество по заказу")
+
+            if st.button(
+                "← Контроль недобора",
+                use_container_width=True,
+                key="go_to_shortage_page",
+            ):
+                switch_page("shortage")
 
         st.divider()
 
         st.markdown("**Как пользоваться**")
-        st.markdown(
-            """
-            1. Загрузите файл A из МойСклад.
-            2. Загрузите файл B из Ozon.
-            3. Нажмите «Сравнить файлы».
-            4. Скачайте готовую таблицу.
-            """
-        )
+
+        if current_page == "shortage":
+            st.markdown(
+                """
+                1. Загрузите файл A из МойСклад.
+                2. Загрузите файл B из Ozon.
+                3. Нажмите «Сравнить файлы».
+                4. Скачайте готовую таблицу.
+                """
+            )
+        else:
+            st.markdown(
+                """
+                1. Загрузите выгрузки поставок Ozon.
+                2. Можно выбрать до четырёх файлов `.xlsx`.
+                3. Нажмите «Рассчитать количество».
+                4. Скачайте итоговую таблицу.
+                """
+            )
 
         st.divider()
 
-        if st.button("🧹 Очистить данные", use_container_width=True):
-            clear_workspace()
-            st.rerun()
-
-        if st.button("⍈  Выйти", use_container_width=True):
+        if st.button(
+            "⍈  Выйти",
+            use_container_width=True,
+            key="logout_button",
+        ):
             logout()
             st.rerun()
 
@@ -927,8 +1044,12 @@ def render_source_preview(
         )
 
 
-def render_main_page() -> None:
-    """Главная страница приложения."""
+# ============================================================
+# ИНТЕРФЕЙС: СТРАНИЦА НЕДОБОРА
+# ============================================================
+
+def render_shortage_page() -> None:
+    """Главная страница контроля недобора."""
     apply_main_styles()
     render_sidebar()
 
@@ -945,7 +1066,7 @@ def render_main_page() -> None:
         unsafe_allow_html=True,
     )
 
-    uploader_version = st.session_state.uploader_version
+    uploader_version = st.session_state.shortage_uploader_version
 
     col_a, col_b = st.columns(2)
 
@@ -996,7 +1117,7 @@ def render_main_page() -> None:
         and source_file_b is not None
     )
 
-    action_col_1, action_col_2, action_col_3 = st.columns([1.2, 1, 3])
+    action_col_1, action_col_2, _ = st.columns([1.2, 1, 3])
 
     with action_col_1:
         compare_clicked = st.button(
@@ -1013,7 +1134,7 @@ def render_main_page() -> None:
         )
 
     if clear_clicked:
-        clear_workspace()
+        clear_shortage_workspace()
         st.rerun()
 
     if compare_clicked:
@@ -1061,7 +1182,7 @@ def render_main_page() -> None:
 
                     if len(validation_errors) > 20:
                         st.write(
-                            f"• Дополнительно найдено ошибок: "
+                            "• Дополнительно найдено ошибок: "
                             f"{len(validation_errors) - 20}"
                         )
 
@@ -1101,52 +1222,28 @@ def render_main_page() -> None:
     st.divider()
     st.subheader("📊 Итог сравнения")
 
-    total_source_quantity = int(
-        result["Исходное количество"].sum()
-    )
-
-    total_ozon_quantity = int(
-        result["Количество в Ozon"].sum()
-    )
-
-    total_shortage = int(
-        result["Недобор"].sum()
-    )
-
-    shortage_positions = int(
-        (result["Недобор"] > 0).sum()
-    )
-
-    zero_shortage_positions = int(
-        (result["Недобор"] == 0).sum()
-    )
+    total_source_quantity = int(result["Исходное количество"].sum())
+    total_ozon_quantity = int(result["Количество в Ozon"].sum())
+    total_shortage = int(result["Недобор"].sum())
+    shortage_positions = int((result["Недобор"] > 0).sum())
+    zero_shortage_positions = int((result["Недобор"] == 0).sum())
 
     metric_1, metric_2, metric_3, metric_4, metric_5 = st.columns(5)
 
-    metric_1.metric(
-        "Позиций в файле A",
-        len(result),
-    )
-
+    metric_1.metric("Позиций в файле A", len(result))
     metric_2.metric(
         "Исходное количество",
         f"{total_source_quantity:,}".replace(",", " "),
     )
-
     metric_3.metric(
         "Подтверждено Ozon",
         f"{total_ozon_quantity:,}".replace(",", " "),
     )
-
     metric_4.metric(
         "Общий недобор",
         f"{total_shortage:,}".replace(",", " "),
     )
-
-    metric_5.metric(
-        "Без недобора",
-        zero_shortage_positions,
-    )
+    metric_5.metric("Без недобора", zero_shortage_positions)
 
     if shortage_positions > 0:
         st.warning(
@@ -1218,13 +1315,12 @@ def render_main_page() -> None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     download_col_xlsx, download_col_csv, _ = st.columns([1, 1, 2])
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     with download_col_xlsx:
         st.download_button(
             label="📥 Скачать XLSX",
-            data=create_xlsx_bytes(result),
+            data=create_shortage_xlsx_bytes(result),
             file_name=f"ozon_nedobor_{timestamp}.xlsx",
             mime=(
                 "application/vnd.openxmlformats-officedocument"
@@ -1252,16 +1348,288 @@ def render_main_page() -> None:
 
 
 # ============================================================
+# ИНТЕРФЕЙС: СТРАНИЦА ФИНАЛЬНОГО КОЛИЧЕСТВА
+# ============================================================
+
+def render_final_quantity_page() -> None:
+    """Страница расчёта финального количества по всем поставкам."""
+    apply_main_styles()
+    render_sidebar()
+
+    st.title("📊 Финальное количество товара по заказу")
+
+    st.markdown(
+        """
+        <div class="description-box">
+            Загрузите все выгрузки Ozon с подтверждённым количеством
+            в поставках. Приложение суммирует количество одинаковых
+            артикулов из всех файлов и рассчитает итоговое количество
+            товара, которое будет отправлено по заказу.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    uploader_version = st.session_state.final_quantity_uploader_version
+
+    with st.container(border=True):
+        st.subheader("Выгрузки подтверждённых поставок Ozon")
+        st.caption(
+            "Можно загрузить от 1 до 4 файлов в формате `.xlsx`."
+        )
+        st.caption(
+            "Структура каждого файла: артикул — D, количество — F, "
+            "начало данных — строка 2."
+        )
+
+        delivery_files = st.file_uploader(
+            "Загрузите выгрузки Ozon",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            key=f"delivery_files_{uploader_version}",
+            label_visibility="collapsed",
+        )
+
+        if delivery_files:
+            st.success(
+                f"Выбрано файлов поставок: {len(delivery_files)}"
+            )
+
+            for uploaded_file in delivery_files:
+                st.caption(f"• `{uploaded_file.name}`")
+
+    if len(delivery_files) > MAX_DELIVERY_FILES:
+        st.error(
+            f"Можно загрузить не более {MAX_DELIVERY_FILES} файлов. "
+            "Удалите лишние файлы перед расчётом."
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    can_calculate = (
+        len(delivery_files) > 0
+        and len(delivery_files) <= MAX_DELIVERY_FILES
+    )
+
+    action_col_1, action_col_2, _ = st.columns([1.5, 1, 3])
+
+    with action_col_1:
+        calculate_clicked = st.button(
+            "🧮 Рассчитать количество",
+            type="primary",
+            disabled=not can_calculate,
+            use_container_width=True,
+        )
+
+    with action_col_2:
+        clear_clicked = st.button(
+            "🧹 Очистить",
+            use_container_width=True,
+            key="clear_final_quantity",
+        )
+
+    if clear_clicked:
+        clear_final_quantity_workspace()
+        st.rerun()
+
+    if calculate_clicked:
+        try:
+            with st.spinner(
+                "Читаем выгрузки и суммируем подтверждённое количество..."
+            ):
+                delivery_data = []
+                raw_files = []
+                validation_errors = []
+                empty_files = []
+
+                for uploaded_file in delivery_files:
+                    raw_df = read_uploaded_file(
+                        uploaded_file.getvalue(),
+                        uploaded_file.name,
+                    )
+
+                    data, errors = extract_source_b(raw_df)
+
+                    raw_files.append(
+                        {
+                            "name": uploaded_file.name,
+                            "raw_df": raw_df,
+                        }
+                    )
+
+                    if data.empty:
+                        empty_files.append(uploaded_file.name)
+
+                    for error in errors:
+                        validation_errors.append(
+                            f"`{uploaded_file.name}`: {error}"
+                        )
+
+                    delivery_data.append(
+                        (uploaded_file.name, data)
+                    )
+
+                if empty_files:
+                    files_text = ", ".join(
+                        f"`{file_name}`"
+                        for file_name in empty_files
+                    )
+
+                    st.error(
+                        "В следующих файлах не найдены товарные позиции: "
+                        f"{files_text}. "
+                        "Проверьте структуру выгрузки Ozon: "
+                        "артикул должен быть в колонке D, количество — в F."
+                    )
+                    return
+
+                if validation_errors:
+                    st.error(
+                        "В выгрузках найдены строки с некорректным количеством. "
+                        "Исправьте файлы и повторите расчёт."
+                    )
+
+                    for error in validation_errors[:20]:
+                        st.write(f"• {error}")
+
+                    if len(validation_errors) > 20:
+                        st.write(
+                            "• Дополнительно найдено ошибок: "
+                            f"{len(validation_errors) - 20}"
+                        )
+
+                    return
+
+                result = calculate_final_order_quantity(delivery_data)
+
+                st.session_state.final_quantity_result = result
+                st.session_state.final_quantity_meta = {
+                    "file_names": [
+                        uploaded_file.name
+                        for uploaded_file in delivery_files
+                    ],
+                    "raw_files": raw_files,
+                }
+
+            st.success("Финальное количество успешно рассчитано.")
+
+        except Exception as error:
+            st.error(f"Ошибка при обработке файлов: {error}")
+            return
+
+    result = st.session_state.final_quantity_result
+    meta = st.session_state.final_quantity_meta
+
+    if result is None or meta is None:
+        st.info(
+            "Загрузите выгрузки подтверждённых поставок Ozon "
+            "и нажмите кнопку «Рассчитать количество»."
+        )
+        return
+
+    st.divider()
+    st.subheader("📦 Итоговое количество к отправке")
+
+    total_quantity = int(
+        result["Финальное количество к отправке"].sum()
+    )
+
+    product_positions = len(result)
+    delivery_files_count = len(meta["file_names"])
+
+    products_in_multiple_files = int(
+        (result["Файлов поставки"] > 1).sum()
+    )
+
+    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+
+    metric_1.metric("Файлов поставок", delivery_files_count)
+    metric_2.metric("Уникальных артикулов", product_positions)
+    metric_3.metric(
+        "Всего единиц к отправке",
+        f"{total_quantity:,}".replace(",", " "),
+    )
+    metric_4.metric(
+        "Артикулов в нескольких поставках",
+        products_in_multiple_files,
+    )
+
+    if products_in_multiple_files > 0:
+        st.info(
+            "Количество по артикулам, которые присутствуют в нескольких "
+            "файлах поставок, уже просуммировано."
+        )
+
+    st.dataframe(
+        result,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Артикул": st.column_config.TextColumn(
+                "Артикул",
+                width="large",
+            ),
+            "Финальное количество к отправке": (
+                st.column_config.NumberColumn(
+                    "Финальное количество к отправке",
+                    format="%d",
+                )
+            ),
+            "Файлов поставки": st.column_config.NumberColumn(
+                "Файлов поставки",
+                format="%d",
+            ),
+        },
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    download_col_xlsx, download_col_csv, _ = st.columns([1, 1, 2])
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    with download_col_xlsx:
+        st.download_button(
+            label="📥 Скачать XLSX",
+            data=create_final_quantity_xlsx_bytes(result),
+            file_name=f"ozon_final_quantity_{timestamp}.xlsx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet"
+            ),
+        )
+
+    with download_col_csv:
+        st.download_button(
+            label="📥 Скачать CSV",
+            data=create_csv_bytes(result),
+            file_name=f"ozon_final_quantity_{timestamp}.csv",
+            mime="text/csv",
+        )
+
+    st.divider()
+    st.subheader("Предпросмотр исходных выгрузок")
+
+    for file_data in meta["raw_files"]:
+        render_source_preview(
+            file_data["raw_df"],
+            f"Предпросмотр: {file_data['name']}",
+        )
+
+
+# ============================================================
 # ТОЧКА ВХОДА
 # ============================================================
 
 def main() -> None:
-    """Роутинг между авторизацией и главной страницей."""
+    """Роутинг между авторизацией и страницами приложения."""
     if not st.session_state.authenticated:
         render_login_page()
         return
 
-    render_main_page()
+    if st.session_state.current_page == "final_quantity":
+        render_final_quantity_page()
+    else:
+        render_shortage_page()
 
 
 if __name__ == "__main__":
